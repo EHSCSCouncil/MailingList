@@ -5,33 +5,60 @@ from email.mime.base import MIMEBase
 from email import encoders
 from openpyxl import load_workbook
 from jinja2 import Template
+import pandas as pd
+from docx import Document
+from dotenv import dotenv_values
+def read_excel_data(excel_path):
+    data = pd.read_excel(excel_path)
+    columns = data.columns.tolist()
+    to, cc, attachments, keywords = None, None, None, None
+    if 'To' in columns:
+        to = data['To']
+    else:
+        raise Exception("Need a column of 'To' in excel path")
+    if 'CC' in columns:
+        cc = data['CC']
+    if 'Attachments' in columns:
+        attachments = data[columns]
+    keywords = {col: data[col] for col in columns if col not in ['To', 'CC', 'Attachments']}
+    return to, cc, attachments, keywords
 
+def delete_paragraph(paragraph):
+    p = paragraph._element
+    p.getparent().remove(p)
+    p._p = p._element = None
 
-def read_excel_data(file_path):
-    wb = load_workbook(file_path)
-    sheet = wb.active
-    data = []
+def read_word_data(word_path):
+    doc = Document(word_path)
+    first_line = doc.paragraphs[0]
+    if 'Subject: ' not in first_line.text:
+        raise Exception("First line of word file must start with 'Subject:'")
+    subject = first_line.text.split("Subject: ")[1]
+    delete_paragraph(first_line)
+    text = '\n\n'.join([paragraph.text for paragraph in doc.paragraphs])
+    print(text)
+    return subject, text
 
-    for row in sheet.iter_rows(min_row=2, values_only=True):
-        to, cc, grade, date, name, author, attachments = row
-        data.append({'to': to, 'cc': cc, 'grade': grade, 'name': name, 'author': author, 'date': date, 'attachments': attachments})
+def email_credentials():
+    secrets = dotenv_values(".env")
+    username = secrets["username"]
+    password = secrets["password"]
+    smtp_server = secrets["server"]
+    smtp_port = secrets["port"]
+    return username, password, smtp_server, smtp_port
 
-    return data
+def substitute_data(body, keywords):
+    for key, value in keywords.items():
+        body = body.replace('{{' + key + '}}', value)
+    if '{{' in body or '}}' in body:
+        raise Exception("there are leftover keywords")
+    return body
 
-
-
-def substitute_data(template_path, data):
-    with open(template_path, 'r') as file:
-        template_content = file.read()
-
-    template = Template(template_content)
-    return template.render(data)
-
-
-def send_email(smtp_server, smtp_port, sender_email, sender_password, to, subject, body, attachments=None):
+def send_email(smtp_server, smtp_port, sender_email, sender_password, to, cc, subject, body, attachments=None):
     msg = MIMEMultipart()
     msg['From'] = sender_email
     msg['To'] = to
+    msg['CC'] = cc
     msg['Subject'] = subject
 
     msg.attach(MIMEText(body, 'plain'))
